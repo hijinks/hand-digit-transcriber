@@ -2,6 +2,7 @@ import cv2
 import scipy
 import PIL.Image
 import os
+import time
 from Tkinter import *
 from scipy import ndimage as nd
 from math import degrees, atan2
@@ -16,6 +17,7 @@ import itertools
 from cement.core import foundation, controller
 from cement.core.controller import expose
 from cement.utils import shell
+
 
 class DigitAppController(controller.CementBaseController):
     class Meta:
@@ -51,14 +53,14 @@ class Transcriber:
         self.check_workspace(config)
         self.get_meta()
 
-        rects, im_blank, im, im_th, image_choice = self.load_image()
+        rects, im_blank, im, im_th, image_choice, im_check = self.load_image()
 
-        self.transcribe(rects, im, im_th, im_blank)
+        self.transcribe(rects, im, im_th, im_blank, im_check)
 
         points = np.array([self.point_ids, self.x_points, self.y_points])
 
         numbers = self.connect_digits(points, im_blank)
-        self.save_data(numbers, image_choice)
+        self.save_data(numbers, image_choice, im_check)
 
     def check_workspace(self, config):
         # Set where we typically source our images, set output directory
@@ -156,6 +158,7 @@ class Transcriber:
         im_gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
         im_gray = cv2.GaussianBlur(im_gray, (5, 5), 0)
         im_blank = np.asarray(PIL.Image.new("RGB", (width, height), "white"))
+        im_check = im_blank.copy()
 
         # Threshold the image
         ret, im_th = cv2.threshold(im_gray, 90, 255, cv2.THRESH_BINARY_INV)
@@ -166,13 +169,13 @@ class Transcriber:
         # Get rectangles contains each contour
         rects = [cv2.boundingRect(ctr) for ctr in ctrs]
 
-        return rects, im_blank, im, im_th, image_choice
+        return rects, im_blank, im, im_th, image_choice, im_check
 
-    def transcribe(self, rects, im, im_th, im_blank):
+    def transcribe(self, rects, im, im_th, im_blank, im_check):
         # Use human to tell us what digits are
 
         i = 0
-
+        im_orig = im.copy()
         for rect in rects:
             # Draw the rectangles
             cv2.rectangle(im, (rect[0], rect[1]), (rect[0] + rect[2], rect[1] + rect[3]), (0, 255, 0), 3)
@@ -187,7 +190,6 @@ class Transcriber:
                 break
 
             if roi.size:
-
 
                 labeled_array, num_features = nd.label(roi)
                 loc = nd.find_objects(labeled_array)
@@ -205,27 +207,49 @@ class Transcriber:
                 inverted = np.invert(mne.mask)
                 roi = (inverted * 255).astype(np.uint8)
 
-                roi = cv2.resize(roi, (28, 28), interpolation=cv2.INTER_AREA)
-                roi = cv2.dilate(roi, (3, 3))
+                x_org = rect[0] + (rect[2]/2)
+                y_org = rect[1] + (rect[3]/2)
 
-                d = threading.Thread(name='image', args=([roi]), target=show_image)
-                d.start()
-                p = shell.Prompt("Type digit you can see: ")
-                input_number = p.input
+                digit_loc = im_orig.copy()
+                cv2.rectangle(digit_loc, (rect[0], rect[1]), (rect[0] + rect[2], rect[1] + rect[3]), (0, 255, 0), 3)
+                dh, dw, dc = digit_loc.shape
+                #roi = cv2.resize(roi, (100, 100))
+                digit_loc = cv2.resize(digit_loc, (int(dw*0.5), int(dh*0.5)))
+
+
+
+                input_number = False
+
+                while input_number is False:
+                    c = threading.Thread(name='check', args=([digit_loc]), target=show_image)
+                    d = threading.Thread(name='image', args=([roi]), target=show_image)
+                    d.start()
+                    p = shell.Prompt("Type digit you can see: ")
+                    shutdown_event.set()
+                    cv2.destroyAllWindows()
+                    print p.input
+                    if p.input == 'check':
+                        c.start()
+                        shell.Prompt("Press enter to continue", default='ENTER')
+                        shutdown_event.set()
+                        cv2.destroyAllWindows()
+                    else:
+                        input_number = p.input
+
+
                 if p.input is not 'n':
                     self.point_ids.append(i)
-                    shutdown_event.set()
+
                     cv2.destroyAllWindows()
 
                     self.number_input.update({i:input_number})
                     #self.number_input.update({i:random.randint(0,9)})
 
-                    x_org = rect[0] + (rect[2]/2)
-                    y_org = rect[1] + (rect[3]/2)
+
                     self.x_points.append(x_org)
                     self.y_points.append(y_org)
-
-                    cv2.circle(im_blank,(x_org,y_org), 5, (0,0,255), -1)
+                    cv2.putText(im_check, str(input_number), (x_org, y_org), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 3)
+                    cv2.circle(im_blank,(x_org,y_org), 5, (0,0,225), -1)
                     np.append(self.taught_data, roi)
                     np.append(self.taught_labels, input_number)
                 else:
@@ -343,7 +367,7 @@ class Transcriber:
 
         return folder_path
 
-    def save_data(self, numbers, image_choice):
+    def save_data(self, numbers, image_choice, im_check):
 
         # Save data to directory
         meta = self.meta
@@ -389,6 +413,9 @@ class Transcriber:
         np.save(os.path.join(data_path,t_data_name), self.taught_data)
         np.save(os.path.join(data_path,t_label_name), self.taught_labels)
 
+        # Save digit image
+        cv2.imwrite(os.path.join(data_path,prefix+'digits.png'), im_check)
+
         # Copy image
         image_basename = os.path.basename(image_choice)
         if not os.path.isfile(os.path.join(data_path, image_basename)):
@@ -398,7 +425,6 @@ class Transcriber:
 shutdown_event = threading.Event()
 
 def show_image(photo):
-    photo = cv2.resize(photo, (100, 100))
     cv2.imshow('image', photo)
     cv2.waitKey(0)
     while not shutdown_event.is_set():
