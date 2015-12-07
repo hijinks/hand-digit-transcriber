@@ -13,7 +13,7 @@ import threading
 from shutil import copyfile
 import random
 import itertools
-
+from itertools import cycle
 from cement.core import foundation, controller
 from cement.core.controller import expose
 from cement.utils import shell
@@ -44,8 +44,8 @@ class Transcriber:
         self.images_path = None
         self.output_path = None
 
-        self.taught_data = np.empty([1])
-        self.taught_labels = np.empty([1])
+        self.taught_data = []
+        self.taught_labels = []
         self.x_points = []
         self.y_points = []
         self.point_ids = []
@@ -60,6 +60,7 @@ class Transcriber:
         points = np.array([self.point_ids, self.x_points, self.y_points])
 
         numbers = self.connect_digits(points, im_blank)
+        print numbers
         self.save_data(numbers, image_choice, im_check)
 
     def check_workspace(self, config):
@@ -142,7 +143,6 @@ class Transcriber:
     def load_image(self):
         # Load image and prepare it for analysis
         image_choice = None
-        image_choice = 'photo_5.jpg'
         while image_choice is None:
             p = shell.Prompt("Image: ")
             print 'Checking '+self.images_path
@@ -171,6 +171,11 @@ class Transcriber:
 
         return rects, im_blank, im, im_th, image_choice, im_check
 
+    def select_label(self, l_array, label):
+        mne = np.ma.masked_not_equal(l_array, label)
+        inverted = np.invert(mne.mask)
+        return (inverted * 255).astype(np.uint8)
+
     def transcribe(self, rects, im, im_th, im_blank, im_check):
         # Use human to tell us what digits are
 
@@ -184,10 +189,14 @@ class Transcriber:
             pt1 = int(rect[1] + rect[3] // 2 - leng // 2)
             pt2 = int(rect[0] + rect[2] // 2 - leng // 2)
             roi = im_th[pt1:pt1+leng, pt2:pt2+leng]
+            s = roi.shape
+            roi_x_org = int(s[0]/2)
+            roi_y_org = int(s[1]/2)
 
             i = i +1
+
             if i > 20:
-                break
+                break;
 
             if roi.size:
 
@@ -203,9 +212,7 @@ class Transcriber:
 
                 # Sum of locations, whichever has the largest is our target
                 target_label = sums. index(max(sums))+1
-                mne = np.ma.masked_not_equal(labeled_array, target_label)
-                inverted = np.invert(mne.mask)
-                roi = (inverted * 255).astype(np.uint8)
+                roi = self.select_label(labeled_array, target_label)
 
                 x_org = rect[0] + (rect[2]/2)
                 y_org = rect[1] + (rect[3]/2)
@@ -220,6 +227,8 @@ class Transcriber:
 
                 input_number = False
 
+                label_choice = cycle(labels)
+                v = label_choice.next()
                 while input_number is False:
                     c = threading.Thread(name='check', args=([digit_loc]), target=show_image)
                     d = threading.Thread(name='image', args=([roi]), target=show_image)
@@ -227,37 +236,45 @@ class Transcriber:
                     p = shell.Prompt("Type digit you can see: ")
                     shutdown_event.set()
                     cv2.destroyAllWindows()
-                    print p.input
                     if p.input == 'check':
                         c.start()
-                        shell.Prompt("Press enter to continue", default='ENTER')
+                        p = shell.Prompt("Is digit correct?", ['y', 'n'])
+                        if p.input == 'n':
+                           roi = self.select_label(labeled_array, label_choice.next())
+
                         shutdown_event.set()
                         cv2.destroyAllWindows()
-                    else:
+                    elif p.input == 'c':
+                        print 'Cycling next label'
+                        roi = self.select_label(labeled_array, label_choice.next())
+                    elif p.input == 'n':
                         input_number = p.input
+                    else:
+                        numbers = ''.join(c for c in p.input if c.isdigit())
+                        if len(numbers):
+                            input_number = numbers
 
 
-                if p.input is not 'n':
+
+                if p.input == 'n':
+                    print 'Target discarded!'
+                else:
                     self.point_ids.append(i)
-
                     cv2.destroyAllWindows()
 
                     self.number_input.update({i:input_number})
                     #self.number_input.update({i:random.randint(0,9)})
 
-
                     self.x_points.append(x_org)
                     self.y_points.append(y_org)
                     cv2.putText(im_check, str(input_number), (x_org, y_org), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 3)
                     cv2.circle(im_blank,(x_org,y_org), 5, (0,0,225), -1)
-                    np.append(self.taught_data, roi)
-                    np.append(self.taught_labels, input_number)
-                else:
-                    print 'Target discarded!'
+                    self.taught_data.append(roi)
+                    self.taught_labels.append(input_number)
 
     def connect_digits(self, points, im_blank):
         # Human test to ensure multi-character digits are grouped, then automatically combine based on location
-
+        print 'Connecting digits'
         all_distances = []
         connections = []
         for i in range(len(points.T)):
@@ -333,20 +350,31 @@ class Transcriber:
         for s in singular_digits:
             numlist.append(int(self.number_input[s]))
 
+        print connected_groups
         for g in connected_groups:
+            print 'start'
             num_string = ''
             # Reorder according to left-right position
             x_coords = []
             for i in g:
-                x_coords.append([i, self.x_points[i-1]])
+                print 'find_coords'
+                pv = np.where(points[0]==i)[0]
+                x_coords.append([i, points[1][pv][0]])
+                print 'found_coords'
 
+            print x_coords
             g_x_coords = np.array(x_coords)
+            print num_string
             l = g_x_coords[np.argsort(g_x_coords[:, 1])]
+            print 'middle'
             for n in l:
-                num_string = num_string+str(self.number_input[int(n[0])])
-
+                input_string = str(self.number_input[int(n[0])])
+                num_string += input_string
+                print num_string
+            print 'finish'
             numlist.append(num_string)
 
+        print numlist
         final_numbers = map(int, numlist)
 
         return final_numbers
@@ -392,9 +420,11 @@ class Transcriber:
         else:
              data_path = self.addFolder(surface_path, meta['site'])
 
+        print 'Save directory: '+data_path
         meta_path = os.path.join(data_path, str(meta['name'])+'_meta.yml')
 
         # Meta yaml
+        print 'Saving meta'
         ruamel.yaml.dump(meta, open(meta_path, 'w'), Dumper=ruamel.yaml.RoundTripDumper)
 
         # Data CSV
@@ -402,18 +432,24 @@ class Transcriber:
         csv_name = prefix+'wolman.csv'
         csv_path = os.path.join(data_path, csv_name)
 
+        print 'Saving csv: '+csv_path
+
         with open(csv_path, 'wb') as csvfile:
             wr = csv.writer(csvfile, delimiter=',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
             for n in numbers:
                 wr.writerow([n])
 
+
         # Save taught data
+        print 'Saving taught data'
         t_data_name = prefix+'learn_data.npy'
         t_label_name = prefix+'learn_labels.npy'
+        print self.taught_labels
         np.save(os.path.join(data_path,t_data_name), self.taught_data)
         np.save(os.path.join(data_path,t_label_name), self.taught_labels)
 
         # Save digit image
+        print 'Saving images'
         cv2.imwrite(os.path.join(data_path,prefix+'digits.png'), im_check)
 
         # Copy image
