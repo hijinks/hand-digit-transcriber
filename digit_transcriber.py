@@ -1,6 +1,7 @@
 import cv2
 import scipy
-import PIL.Image
+import PIL
+from PIL import ImageTk
 import os
 import time
 from Tkinter import *
@@ -9,6 +10,7 @@ from math import degrees, atan2
 import csv
 import ruamel.yaml
 import numpy as np
+
 import threading
 from shutil import copyfile
 import random
@@ -188,15 +190,24 @@ class Transcriber:
             leng = int(rect[3] * 1.6)
             pt1 = int(rect[1] + rect[3] // 2 - leng // 2)
             pt2 = int(rect[0] + rect[2] // 2 - leng // 2)
+
+
+            if pt1 < 0:
+                pt1 = 0
+
+            if pt2 < 0:
+                pt2 = 0
+
             roi = im_th[pt1:pt1+leng, pt2:pt2+leng]
             s = roi.shape
+
             roi_x_org = int(s[0]/2)
             roi_y_org = int(s[1]/2)
 
             i = i +1
 
-            if i > 20:
-                break;
+            #if i > 10:
+                # break;
 
             if roi.size:
 
@@ -307,7 +318,7 @@ class Transcriber:
         connection_threshold = distance_median + distance_stdev
 
         cT = connectionThresholder(connection_threshold, im_blank, connections)
-        set_threshold = cT.get_num()
+        cv2.destroyAllWindows()
         ok_connections = cT.current_connections
         groups = []
 
@@ -319,6 +330,74 @@ class Transcriber:
 
         # Remove duplicates
         groups = list(groups for groups,_ in itertools.groupby(groups))
+
+        height, width, channels = im_blank.shape
+        connection_image = cT.connection_image
+
+
+        p = shell.Prompt('Select individual connections?', ['y', 'n'])
+        if p.input == 'y':
+            while True:
+                app = connectionSelect(connection_image)
+                app.mainloop()
+                roi = [int(x * 2) for x in app.dimensions]
+                points_in_roi = []
+                for i in range(len(points.T)):
+                    if roiCheck(roi, [points[1][i], points[2][i]]) is True:
+                        points_in_roi.append(points[0][i])
+
+                for pr in points_in_roi:
+                    for g in groups:
+                        for gi in g:
+                            if gi == pr:
+                                g.remove(gi)
+
+                groups.append(points_in_roi)
+
+                im_blank_copy = im_blank.copy()
+
+                print points_in_roi
+
+                # Reset connections
+                for g in groups:
+
+                    # Create new distance lists
+
+                    if len(g) > 1:
+                        # For each group id
+                        p_points = []
+                        c_points = []
+                        for p in g:
+                            # List through other ids
+                            d = [] # Distances to original point
+                            e = [] # Point ids
+                            p_points.append(p)
+                            a = np.array((points[1][p-1], points[2][p-1], 1))
+                            for r in g:
+                                # If id is different
+                                if p != r:
+                                    # Record distance
+                                    b = np.array((points[1][r-1], points[2][r-1], 1))
+                                    d.append(np.linalg.norm(a-b))
+                                    e.append(r)
+
+                            nn = e[d.index(min(d))]
+                            c_points.append(nn)
+
+                        print(p_points)
+                        print 'woah'
+                        print(c_points)
+                        for m in range(len(c_points)):
+                            c1 = (points[1][p_points[m]-1], points[2][p_points[m]-1])
+                            c2 = (points[1][c_points[m]-1], points[2][c_points[m]-1])
+                            cv2.line(im_blank_copy,c1,c2,(255,0,0),1)
+
+                connection_image = cv2.resize(im_blank_copy, (int(width*0.5), int(height*0.5)))
+
+                p = shell.Prompt('Select more regions?', ['y', 'n'])
+                if p.input == 'n':
+                    break
+
 
         a = np.array(groups)
         a.flatten()
@@ -350,7 +429,6 @@ class Transcriber:
         for s in singular_digits:
             numlist.append(int(self.number_input[s]))
 
-        print connected_groups
         for g in connected_groups:
             print 'start'
             num_string = ''
@@ -466,6 +544,22 @@ def show_image(photo):
     while not shutdown_event.is_set():
         time.sleep(1.0)
 
+def roiCheck(roi, point):
+    inside = False
+    x_inside = False
+    y_inside = False
+
+    if roi[0] < point[0] < roi[2]:
+        x_inside = True
+
+    if roi[1] < point[1] < roi[3]:
+        y_inside = True
+
+    if x_inside and y_inside:
+        inside = True
+
+    return inside
+
 class connectionThresholder():
 
     def __init__(self, starting_val, image, connections):
@@ -484,6 +578,7 @@ class connectionThresholder():
         self.el.bind("<Return>", self.set_response)
         self.current_connections = connections
         self.original_image = image
+        self.connection_image = None
         self.load_window()
         self.el.focus()
         self.root.mainloop()
@@ -498,7 +593,7 @@ class connectionThresholder():
 
         height, width, channels = im.shape
         im = cv2.resize(im, (int(width*0.5), int(height*0.5)))
-
+        self.connection_image = im
         self.current_image = cv2.imshow('image', im)
         cv2.waitKey(100)
 
@@ -514,37 +609,75 @@ class connectionThresholder():
         self.root.destroy()
         cv2.destroyAllWindows()
 
-try:
-    app.setup()
+class connectionSelect(Tk):
+    def __init__(self, image):
+        Tk.__init__(self)
+        self.x = self.y = 0
+        self.im = image
+        self.canvas = Canvas(self, width=512, height=512, cursor="cross")
+        self.canvas.pack(side="top", fill="both", expand=True)
+        self.canvas.bind("<ButtonPress-1>", self.on_button_press)
+        self.canvas.bind("<B1-Motion>", self.on_move_press)
+        self.canvas.bind("<ButtonRelease-1>", self.on_button_release)
+        self.rect = None
+        self.start_x = None
+        self.start_y = None
+        self.dimensions = []
+        self._draw_image()
 
-    app.run()
+    def _draw_image(self):
+        im = PIL.Image.fromarray(self.im)
+        self.tk_im = ImageTk.PhotoImage(image=im)
+        self.canvas.create_image(0,0,anchor="nw",image=self.tk_im)
 
-    # Using my own config for now
-    sam_config_path = '/home/sb708/.sam'
-    config_raw = ruamel.yaml.load(open(sam_config_path), ruamel.yaml.RoundTripLoader)
-    config = {
-        'image_directory': None,
-        'output_directory': None
-    }
+    def on_button_press(self, event):
+        # save mouse drag start position
+        self.start_x = event.x
+        self.start_y = event.y
 
-    if config_raw.has_key('digit_recogniser'):
-        config = config_raw['digit_recogniser']
+        # create rectangle if not yet exist
+        #if not self.rect:
+        self.rect = self.canvas.create_rectangle(self.x, self.y, 1, 1)
 
-    cont = True
-    first_run = True
-    while cont is True:
-        if first_run is not True:
-            p = shell.Prompt("Transcribe new image?", ['y','n'])
-            if p.input is 'y':
-                print("Running...")
-                tsc = Transcriber(config)
-            else:
-                cont = False
-        else:
-            first_run = False
+    def on_move_press(self, event):
+        curX, curY = (event.x, event.y)
+
+        # expand rectangle as you drag the mouse
+        self.canvas.coords(self.rect, self.start_x, self.start_y, curX, curY)
+        self.dimensions = [self.start_x, self.start_y, curX, curY]
+
+    def on_button_release(self, event):
+        self.destroy()
+
+app.setup()
+
+app.run()
+
+# Using my own config for now
+sam_config_path = '/home/hijinks/.sam'
+config_raw = ruamel.yaml.load(open(sam_config_path), ruamel.yaml.RoundTripLoader)
+config = {
+    'image_directory': None,
+    'output_directory': None
+}
+
+if config_raw.has_key('digit_recogniser'):
+    config = config_raw['digit_recogniser']
+
+cont = True
+first_run = True
+while cont is True:
+    if first_run is not True:
+        p = shell.Prompt("Transcribe new image?", ['y','n'])
+        if p.input is 'y':
             print("Running...")
             tsc = Transcriber(config)
+        else:
+                cont = False
+    else:
+        first_run = False
+        print("Running...")
+        tsc = Transcriber(config)
 
-finally:
-    print 'Finishing up...'
-    app.close()
+print 'Finishing up...'
+app.close()
