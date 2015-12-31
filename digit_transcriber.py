@@ -10,7 +10,6 @@ from math import degrees, atan2
 import csv
 import ruamel.yaml
 import numpy as np
-
 import threading
 from shutil import copyfile
 import random
@@ -19,7 +18,8 @@ from itertools import cycle
 from cement.core import foundation, controller
 from cement.core.controller import expose
 from cement.utils import shell
-
+from threading import Lock
+lock = Lock()
 
 class DigitAppController(controller.CementBaseController):
     class Meta:
@@ -103,6 +103,13 @@ class Transcriber:
         cover = None
         location = None
 
+        fan = 'b10'
+        surface = 'test'
+        site = 'test'
+        name = 'test'
+        cover = '100'
+        location = '342432 432432'
+
         while fan is None:
             p = shell.Prompt("Fan: ")
             if p:
@@ -145,6 +152,7 @@ class Transcriber:
     def load_image(self):
         # Load image and prepare it for analysis
         image_choice = None
+        image_choice = 'photo_5.jpg'
         while image_choice is None:
             p = shell.Prompt("Image: ")
             print 'Checking '+self.images_path
@@ -234,40 +242,33 @@ class Transcriber:
                 #roi = cv2.resize(roi, (100, 100))
                 digit_loc = cv2.resize(digit_loc, (int(dw*0.5), int(dh*0.5)))
 
-
-
                 input_number = False
 
                 label_choice = cycle(labels)
                 v = label_choice.next()
                 while input_number is False:
-                    c = threading.Thread(name='check', args=([digit_loc]), target=show_image)
-                    d = threading.Thread(name='image', args=([roi]), target=show_image)
-                    d.start()
-                    p = shell.Prompt("Type digit you can see: ")
-                    shutdown_event.set()
-                    cv2.destroyAllWindows()
-                    if p.input == 'check':
-                        c.start()
-                        p = shell.Prompt("Is digit correct?", ['y', 'n'])
-                        if p.input == 'n':
+                    rh, rw = roi.shape
+                    iP = imagePrompt(roi, rh, rw)
+                    if iP.output == 'check':
+                        print 'Is digit correct?, [y, n]'
+                        dh, dw, dc = digit_loc.shape
+                        jP = imagePrompt(digit_loc, dh, dw)
+                        if jP.output == 'n':
                            roi = self.select_label(labeled_array, label_choice.next())
 
-                        shutdown_event.set()
-                        cv2.destroyAllWindows()
-                    elif p.input == 'c':
+                    elif iP.output == 'c':
                         print 'Cycling next label'
                         roi = self.select_label(labeled_array, label_choice.next())
-                    elif p.input == 'n':
-                        input_number = p.input
+                    elif iP.output == 'n':
+                        input_number = iP.output
                     else:
-                        numbers = ''.join(c for c in p.input if c.isdigit())
+                        numbers = ''.join(c for c in iP.output if c.isdigit())
                         if len(numbers):
                             input_number = numbers
 
 
 
-                if p.input == 'n':
+                if iP.output == 'n':
                     print 'Target discarded!'
                 else:
                     self.point_ids.append(i)
@@ -538,11 +539,24 @@ class Transcriber:
 
 shutdown_event = threading.Event()
 
-def show_image(photo):
-    cv2.imshow('image', photo)
-    cv2.waitKey(0)
-    while not shutdown_event.is_set():
-        time.sleep(1.0)
+class imagePrompt():
+    def __init__(self, image, h, w):
+        self.root = Tk()
+        self.output = False
+        self.entry = Entry(self.root)
+        self.entry.pack()
+        self.entry.focus_set()
+        self.canvas = Canvas(self.root, width=w, height=h)
+        self.canvas.pack()
+        im = PIL.Image.fromarray(image)
+        tk_img = ImageTk.PhotoImage(im)
+        self.canvas.create_image(0, 0, image=tk_img, anchor='nw')
+        self.entry.bind('<Key-Return>', self.response)
+        self.root.mainloop()
+
+    def response(self, event):
+        self.output = self.entry.get()
+        self.root.destroy()
 
 def roiCheck(roi, point):
     inside = False
@@ -654,7 +668,7 @@ app.setup()
 app.run()
 
 # Using my own config for now
-sam_config_path = '/home/hijinks/.sam'
+sam_config_path = '/home/sam/.sam'
 config_raw = ruamel.yaml.load(open(sam_config_path), ruamel.yaml.RoundTripLoader)
 config = {
     'image_directory': None,
