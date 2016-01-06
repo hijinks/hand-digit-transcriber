@@ -229,8 +229,8 @@ class Transcriber:
 
             i = i +1
 
-            if i > 10:
-                break;
+            #if i > 10:
+                #break;
 
             if roi.size > 100:
                 labeled_array, num_features = nd.label(roi)
@@ -257,6 +257,7 @@ class Transcriber:
                 digit_loc = cv2.resize(digit_loc, (int(dw*sf2), int(dh*sf2)))
 
                 input_number = False
+                #input_number = random.randint(0,9)
 
                 label_choice = cycle(labels)
                 v = label_choice.next()
@@ -286,9 +287,7 @@ class Transcriber:
                 else:
                     self.point_ids.append(i)
                     cv2.destroyAllWindows()
-
                     self.number_input.update({i:input_number})
-                    #self.number_input.update({i:random.randint(0,9)})
 
                     self.x_points.append(x_org)
                     self.y_points.append(y_org)
@@ -296,6 +295,18 @@ class Transcriber:
                     cv2.circle(im_points,(x_org,y_org), 7, (0,0,225), -1)
                     self.taught_data.append(roi)
                     self.taught_labels.append(input_number)
+
+                # self.point_ids.append(i)
+                # cv2.destroyAllWindows()
+                #
+                # self.number_input.update({i:input_number})
+                #
+                # self.x_points.append(x_org)
+                # self.y_points.append(y_org)
+                # cv2.putText(im_check, str(input_number), (x_org, y_org), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 3)
+                # cv2.circle(im_points,(x_org,y_org), 7, (0,0,225), -1)
+                # self.taught_data.append(roi)
+                # self.taught_labels.append(input_number)
 
 
         return im_points
@@ -358,6 +369,12 @@ class Transcriber:
                 app = connectionSelect(connection_image)
                 app.mainloop()
                 roi = [int(x * sf) for x in app.dimensions]
+                # cv2.rectangle(image, (roi[0], roi[1]), (roi[2], roi[3]), (0, 255, 0), 3)
+                # height, width, channels = image.shape
+                # im2 = cv2.resize(image, (int(width*sf2), int(height*sf2)))
+                # cv2.imshow('test', im2)
+                # cv2.waitKey(0)
+                print points[0]
                 if len(roi) > 0:
                     points_in_roi = []
                     for i in range(len(points.T)):
@@ -373,7 +390,10 @@ class Transcriber:
                     groups.append(points_in_roi)
                     im_copy = image.copy()
 
+                    # Points in ROI
                     # Reset connections
+
+                    print groups
                     for g in groups:
 
                         # Create new distance lists
@@ -387,12 +407,14 @@ class Transcriber:
                                 d = [] # Distances to original point
                                 e = [] # Point ids
                                 p_points.append(p)
-                                a = np.array((points[1][p-1], points[2][p-1], 1))
+                                gt = np.where(points[0]==p)[0]
+                                a = np.array((points[1][gt], points[2][gt], 1))
                                 for r in g:
                                     # If id is different
                                     if p != r:
                                         # Record distance
-                                        b = np.array((points[1][r-1], points[2][r-1], 1))
+                                        pt = np.where(points[0]==r)[0]
+                                        b = np.array((points[1][pt], points[2][pt], 1))
                                         d.append(np.linalg.norm(a-b))
                                         e.append(r)
 
@@ -400,8 +422,10 @@ class Transcriber:
                                 c_points.append(nn)
 
                             for m in range(len(c_points)):
-                                c1 = (points[1][p_points[m]-1], points[2][p_points[m]-1])
-                                c2 = (points[1][c_points[m]-1], points[2][c_points[m]-1])
+                                c1p = np.where(points[0]==p_points[m])[0]
+                                c2p = np.where(points[0]==c_points[m])[0]
+                                c1 = (points[1][c1p], points[2][c1p])
+                                c2 = (points[1][c2p], points[2][c2p])
                                 cv2.line(im_copy,c1,c2,(255,0,0),3)
 
                     connection_image = cv2.resize(im_copy, (int(width*sf2), int(height*sf2)))
@@ -563,10 +587,14 @@ def roiCheck(roi, point):
     x_inside = False
     y_inside = False
 
-    if roi[0] < point[0] < roi[2]:
+    x_lims = [roi[0], roi[2]]
+    x_lims.sort()
+    y_lims = [roi[1], roi[3]]
+    y_lims.sort()
+    if x_lims[0] < point[0] < x_lims[1]:
         x_inside = True
 
-    if roi[1] < point[1] < roi[3]:
+    if y_lims[0] < point[1] < y_lims[1]:
         y_inside = True
 
     if x_inside and y_inside:
@@ -620,6 +648,7 @@ class connectionThresholder():
 
     def ok_response(self):
         self.num = self.el.get()
+        self.imnum = self.el.get()
         self.root.destroy()
         cv2.destroyAllWindows()
 
