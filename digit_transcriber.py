@@ -45,7 +45,7 @@ class Transcriber:
         self.meta = None
         self.images_path = None
         self.output_path = None
-
+        self.data_path = None
         self.taught_data = []
         self.taught_labels = []
         self.x_points = []
@@ -53,23 +53,23 @@ class Transcriber:
         self.point_ids = []
         self.number_input = {}
         self.check_workspace(config)
-        self.get_meta()
 
         rects, im_blank, im, im_th, image_choice, im_check = self.load_image()
 
-        self.transcribe(rects, im, im_th, im_blank, im_check)
+        self.get_meta(image_choice)
+
+        im_points = self.transcribe(rects, im, im_th, im_blank, im_check)
 
         points = np.array([self.point_ids, self.x_points, self.y_points])
 
-        numbers = self.connect_digits(points, im_blank)
-        print numbers
+        numbers = self.connect_digits(points, im_points)
+
         self.save_data(numbers, image_choice, im_check)
 
     def check_workspace(self, config):
         # Set where we typically source our images, set output directory
 
         if os.path.isdir(config['image_directory']):
-
             self.images_path = config['image_directory']
 
         else:
@@ -85,16 +85,20 @@ class Transcriber:
                 if os.path.isdir(p.input):
                     self.output_path = p.input
 
+        if os.path.isdir(config['data_directory']):
+            self.data_path = config['data_directory']
+
         # Save config
         config = {
             'digit_recogniser': {
                 'image_directory': self.images_path,
-                'output_directory': self.output_path
+                'output_directory': self.output_path,
+                'data_directory': self.data_path
             }
         }
         ruamel.yaml.dump(config, open(sam_config_path, 'w'), Dumper=ruamel.yaml.RoundTripDumper)
 
-    def get_meta(self):
+    def get_meta(self, image_choice):
         # Context and data labels
         fan = None
         surface = None
@@ -102,43 +106,52 @@ class Transcriber:
         name = None
         cover = None
         location = None
+        meta_check = False
+        if self.data_path:
+            image_name = os.path.splitext(os.path.basename(image_choice))[0]
+            if os.path.exists(os.path.join(self.data_path, 'wolman_'+image_name+'.yml')):
 
-        fan = 'b10'
-        surface = 'test'
-        site = 'test'
-        name = 'test'
-        cover = '100'
-        location = '342432 432432'
+                image_data = ruamel.yaml.load(open(os.path.join(self.data_path, 'wolman_'+image_name+'.yml')), ruamel.yaml.RoundTripLoader)
 
-        while fan is None:
-            p = shell.Prompt("Fan: ")
-            if p:
-                fan = p.input
+                fan = image_data['fan']
+                surface = image_data['surface']
+                site = image_data['site']
+                name = image_data['name']
+                cover = image_data['cover']
+                location = image_data['location']
+                meta_check = True
 
-        while surface is None:
-            p = shell.Prompt("Surface: ")
-            if p:
-                surface = p.input
+        if meta_check is False:
 
-        while site is None:
-            p = shell.Prompt("Site: ")
-            if p:
-                site = p.input
+            while fan is None:
+                p = shell.Prompt("Fan: ")
+                if p:
+                    fan = p.input
 
-        while name is None:
-            p = shell.Prompt("Name: ")
-            if p:
-                name = p.input
+            while surface is None:
+                p = shell.Prompt("Surface: ")
+                if p:
+                    surface = p.input
 
-        while cover is None:
-            p = shell.Prompt("% cover: ")
-            if p:
-                cover = p.input
+            while site is None:
+                p = shell.Prompt("Site: ")
+                if p:
+                    site = p.input
 
-        while location is None:
-            p = shell.Prompt("Location: ")
-            if p:
-                location = p.input
+            while name is None:
+                p = shell.Prompt("Name: ")
+                if p:
+                    name = p.input
+
+            while cover is None:
+                p = shell.Prompt("% cover: ")
+                if p:
+                    cover = p.input
+
+            while location is None:
+                p = shell.Prompt("Location: ")
+                if p:
+                    location = p.input
 
         self.meta = {
             'fan': fan,
@@ -152,11 +165,10 @@ class Transcriber:
     def load_image(self):
         # Load image and prepare it for analysis
         image_choice = None
-        image_choice = 'photo_5.jpg'
         while image_choice is None:
             p = shell.Prompt("Image: ")
             print 'Checking '+self.images_path
-            if os.path.exists(p.input):
+            if os.path.exists(os.path.join(self.images_path, p.input)):
                 image_choice = os.path.join(self.images_path, p.input)
             else:
                 print 'Could not find '+p.input
@@ -191,6 +203,8 @@ class Transcriber:
 
         i = 0
         im_orig = im.copy()
+        im_points = im.copy()
+        s_type = len(rects)
         for rect in rects:
             # Draw the rectangles
             cv2.rectangle(im, (rect[0], rect[1]), (rect[0] + rect[2], rect[1] + rect[3]), (0, 255, 0), 3)
@@ -199,6 +213,7 @@ class Transcriber:
             pt1 = int(rect[1] + rect[3] // 2 - leng // 2)
             pt2 = int(rect[0] + rect[2] // 2 - leng // 2)
 
+            s_type = s_type - 1
 
             if pt1 < 0:
                 pt1 = 0
@@ -214,11 +229,10 @@ class Transcriber:
 
             i = i +1
 
-            #if i > 10:
-                # break;
+            if i > 10:
+                break;
 
-            if roi.size:
-
+            if roi.size > 100:
                 labeled_array, num_features = nd.label(roi)
                 loc = nd.find_objects(labeled_array)
                 sums = []
@@ -240,7 +254,7 @@ class Transcriber:
                 cv2.rectangle(digit_loc, (rect[0], rect[1]), (rect[0] + rect[2], rect[1] + rect[3]), (0, 255, 0), 3)
                 dh, dw, dc = digit_loc.shape
                 #roi = cv2.resize(roi, (100, 100))
-                digit_loc = cv2.resize(digit_loc, (int(dw*0.5), int(dh*0.5)))
+                digit_loc = cv2.resize(digit_loc, (int(dw*sf2), int(dh*sf2)))
 
                 input_number = False
 
@@ -267,7 +281,6 @@ class Transcriber:
                             input_number = numbers
 
 
-
                 if iP.output == 'n':
                     print 'Target discarded!'
                 else:
@@ -280,11 +293,14 @@ class Transcriber:
                     self.x_points.append(x_org)
                     self.y_points.append(y_org)
                     cv2.putText(im_check, str(input_number), (x_org, y_org), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 3)
-                    cv2.circle(im_blank,(x_org,y_org), 5, (0,0,225), -1)
+                    cv2.circle(im_points,(x_org,y_org), 7, (0,0,225), -1)
                     self.taught_data.append(roi)
                     self.taught_labels.append(input_number)
 
-    def connect_digits(self, points, im_blank):
+
+        return im_points
+
+    def connect_digits(self, points, image):
         # Human test to ensure multi-character digits are grouped, then automatically combine based on location
         print 'Connecting digits'
         all_distances = []
@@ -318,7 +334,8 @@ class Transcriber:
 
         connection_threshold = distance_median + distance_stdev
 
-        cT = connectionThresholder(connection_threshold, im_blank, connections)
+
+        cT = connectionThresholder(connection_threshold, image, connections)
         cv2.destroyAllWindows()
         ok_connections = cT.current_connections
         groups = []
@@ -332,79 +349,72 @@ class Transcriber:
         # Remove duplicates
         groups = list(groups for groups,_ in itertools.groupby(groups))
 
-        height, width, channels = im_blank.shape
+        height, width, channels = image.shape
         connection_image = cT.connection_image
-
 
         p = shell.Prompt('Select individual connections?', ['y', 'n'])
         if p.input == 'y':
             while True:
                 app = connectionSelect(connection_image)
                 app.mainloop()
-                roi = [int(x * 2) for x in app.dimensions]
-                points_in_roi = []
-                for i in range(len(points.T)):
-                    if roiCheck(roi, [points[1][i], points[2][i]]) is True:
-                        points_in_roi.append(points[0][i])
+                roi = [int(x * sf) for x in app.dimensions]
+                if len(roi) > 0:
+                    points_in_roi = []
+                    for i in range(len(points.T)):
+                        if roiCheck(roi, [points[1][i], points[2][i]]) is True:
+                            points_in_roi.append(points[0][i])
 
-                for pr in points_in_roi:
+                    for pr in points_in_roi:
+                        for g in groups:
+                            for gi in g:
+                                if gi == pr:
+                                    g.remove(gi)
+
+                    groups.append(points_in_roi)
+                    im_copy = image.copy()
+
+                    # Reset connections
                     for g in groups:
-                        for gi in g:
-                            if gi == pr:
-                                g.remove(gi)
 
-                groups.append(points_in_roi)
+                        # Create new distance lists
 
-                im_blank_copy = im_blank.copy()
+                        if len(g) > 1:
+                            # For each group id
+                            p_points = []
+                            c_points = []
+                            for p in g:
+                                # List through other ids
+                                d = [] # Distances to original point
+                                e = [] # Point ids
+                                p_points.append(p)
+                                a = np.array((points[1][p-1], points[2][p-1], 1))
+                                for r in g:
+                                    # If id is different
+                                    if p != r:
+                                        # Record distance
+                                        b = np.array((points[1][r-1], points[2][r-1], 1))
+                                        d.append(np.linalg.norm(a-b))
+                                        e.append(r)
 
-                print points_in_roi
+                                nn = e[d.index(min(d))]
+                                c_points.append(nn)
 
-                # Reset connections
-                for g in groups:
+                            for m in range(len(c_points)):
+                                c1 = (points[1][p_points[m]-1], points[2][p_points[m]-1])
+                                c2 = (points[1][c_points[m]-1], points[2][c_points[m]-1])
+                                cv2.line(im_copy,c1,c2,(255,0,0),3)
 
-                    # Create new distance lists
-
-                    if len(g) > 1:
-                        # For each group id
-                        p_points = []
-                        c_points = []
-                        for p in g:
-                            # List through other ids
-                            d = [] # Distances to original point
-                            e = [] # Point ids
-                            p_points.append(p)
-                            a = np.array((points[1][p-1], points[2][p-1], 1))
-                            for r in g:
-                                # If id is different
-                                if p != r:
-                                    # Record distance
-                                    b = np.array((points[1][r-1], points[2][r-1], 1))
-                                    d.append(np.linalg.norm(a-b))
-                                    e.append(r)
-
-                            nn = e[d.index(min(d))]
-                            c_points.append(nn)
-
-                        print(p_points)
-                        print 'woah'
-                        print(c_points)
-                        for m in range(len(c_points)):
-                            c1 = (points[1][p_points[m]-1], points[2][p_points[m]-1])
-                            c2 = (points[1][c_points[m]-1], points[2][c_points[m]-1])
-                            cv2.line(im_blank_copy,c1,c2,(255,0,0),1)
-
-                connection_image = cv2.resize(im_blank_copy, (int(width*0.5), int(height*0.5)))
+                    connection_image = cv2.resize(im_copy, (int(width*sf2), int(height*sf2)))
 
                 p = shell.Prompt('Select more regions?', ['y', 'n'])
                 if p.input == 'n':
                     break
 
-
         a = np.array(groups)
-        a.flatten()
+        a = np.hstack(a)
         connected_points = np.unique(a)
-        singular_digits = np.setdiff1d(points[0], connected_points)
 
+        singular_digits = np.setdiff1d(points[0], connected_points)
         connected_groups = []
         # Group interconnected
         for g in groups:
@@ -431,29 +441,20 @@ class Transcriber:
             numlist.append(int(self.number_input[s]))
 
         for g in connected_groups:
-            print 'start'
             num_string = ''
             # Reorder according to left-right position
             x_coords = []
             for i in g:
-                print 'find_coords'
                 pv = np.where(points[0]==i)[0]
                 x_coords.append([i, points[1][pv][0]])
-                print 'found_coords'
 
-            print x_coords
             g_x_coords = np.array(x_coords)
-            print num_string
             l = g_x_coords[np.argsort(g_x_coords[:, 1])]
-            print 'middle'
             for n in l:
                 input_string = str(self.number_input[int(n[0])])
                 num_string += input_string
-                print num_string
-            print 'finish'
             numlist.append(num_string)
 
-        print numlist
         final_numbers = map(int, numlist)
 
         return final_numbers
@@ -523,7 +524,6 @@ class Transcriber:
         print 'Saving taught data'
         t_data_name = prefix+'learn_data.npy'
         t_label_name = prefix+'learn_labels.npy'
-        print self.taught_labels
         np.save(os.path.join(data_path,t_data_name), self.taught_data)
         np.save(os.path.join(data_path,t_label_name), self.taught_labels)
 
@@ -603,10 +603,10 @@ class connectionThresholder():
         for c in self.connections:
             if c[4] < self.threshold:
                 self.current_connections.append(c)
-                cv2.line(im,(c[0],c[1]),(c[2],c[3]),(255,0,0),1)
+                cv2.line(im,(c[0],c[1]),(c[2],c[3]),(255,0,0),3)
 
         height, width, channels = im.shape
-        im = cv2.resize(im, (int(width*0.5), int(height*0.5)))
+        im = cv2.resize(im, (int(width*sf2), int(height*sf2)))
         self.connection_image = im
         self.current_image = cv2.imshow('image', im)
         cv2.waitKey(100)
@@ -628,7 +628,8 @@ class connectionSelect(Tk):
         Tk.__init__(self)
         self.x = self.y = 0
         self.im = image
-        self.canvas = Canvas(self, width=512, height=512, cursor="cross")
+        dh, dw, dc = image.shape
+        self.canvas = Canvas(self, width=dw, height=dh, cursor="cross")
         self.canvas.pack(side="top", fill="both", expand=True)
         self.canvas.bind("<ButtonPress-1>", self.on_button_press)
         self.canvas.bind("<B1-Motion>", self.on_move_press)
@@ -663,9 +664,15 @@ class connectionSelect(Tk):
     def on_button_release(self, event):
         self.destroy()
 
+
+sf = 2.5
+sf2 = 1/float(sf)
+
+
 app.setup()
 
 app.run()
+
 
 # Using my own config for now
 sam_config_path = '/home/sam/.sam'
