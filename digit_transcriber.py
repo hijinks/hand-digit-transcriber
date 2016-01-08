@@ -109,10 +109,11 @@ class Transcriber:
         meta_check = False
         if self.data_path:
             image_name = os.path.splitext(os.path.basename(image_choice))[0]
+            print image_name
+            print 'wolman_'+image_name+'.yml'
             if os.path.exists(os.path.join(self.data_path, 'wolman_'+image_name+'.yml')):
 
                 image_data = ruamel.yaml.load(open(os.path.join(self.data_path, 'wolman_'+image_name+'.yml')), ruamel.yaml.RoundTripLoader)
-
                 fan = image_data['fan']
                 surface = image_data['surface']
                 site = image_data['site']
@@ -214,7 +215,7 @@ class Transcriber:
             pt2 = int(rect[0] + rect[2] // 2 - leng // 2)
 
             s_type = s_type - 1
-
+            print s_type
             if pt1 < 0:
                 pt1 = 0
 
@@ -271,7 +272,7 @@ class Transcriber:
                         if jP.output == 'n':
                            roi = self.select_label(labeled_array, label_choice.next())
 
-                    elif iP.output == 'c':
+                    elif iP.output == '.':
                         print 'Cycling next label'
                         roi = self.select_label(labeled_array, label_choice.next())
                     elif iP.output == 'n':
@@ -364,7 +365,7 @@ class Transcriber:
         connection_image = cT.connection_image
 
         p = shell.Prompt('Select individual connections?', ['y', 'n'])
-        if p.input == 'y':
+        if p.input != 'n':
             while True:
                 app = connectionSelect(connection_image)
                 app.mainloop()
@@ -374,7 +375,6 @@ class Transcriber:
                 # im2 = cv2.resize(image, (int(width*sf2), int(height*sf2)))
                 # cv2.imshow('test', im2)
                 # cv2.waitKey(0)
-                print points[0]
                 if len(roi) > 0:
                     points_in_roi = []
                     for i in range(len(points.T)):
@@ -393,7 +393,6 @@ class Transcriber:
                     # Points in ROI
                     # Reset connections
 
-                    print groups
                     for g in groups:
 
                         # Create new distance lists
@@ -440,6 +439,7 @@ class Transcriber:
 
         singular_digits = np.setdiff1d(points[0], connected_points)
         connected_groups = []
+
         # Group interconnected
         for g in groups:
             c = [g]
@@ -452,7 +452,7 @@ class Transcriber:
 
         for m in range(len(connected_groups)):
             b = np.array(connected_groups[m])
-            b.flatten()
+            b = np.hstack(b)
             connected_groups[m] = np.unique(b).tolist()
 
 
@@ -464,13 +464,18 @@ class Transcriber:
         for s in singular_digits:
             numlist.append(int(self.number_input[s]))
 
+        print connected_groups
         for g in connected_groups:
             num_string = ''
             # Reorder according to left-right position
             x_coords = []
+            print g
             for i in g:
+                print i
                 pv = np.where(points[0]==i)[0]
-                x_coords.append([i, points[1][pv][0]])
+                # i
+                if pv:
+                    x_coords.append([i, points[1][pv][0]])
 
             g_x_coords = np.array(x_coords)
             l = g_x_coords[np.argsort(g_x_coords[:, 1])]
