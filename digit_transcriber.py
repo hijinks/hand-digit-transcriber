@@ -3,10 +3,10 @@ import scipy
 import PIL
 from PIL import ImageTk
 import os
-import time
 from Tkinter import *
 from scipy import ndimage as nd
 from math import degrees, atan2
+import re
 import csv
 import ruamel.yaml
 import numpy as np
@@ -18,8 +18,9 @@ from itertools import cycle
 from cement.core import foundation, controller
 from cement.core.controller import expose
 from cement.utils import shell
-from threading import Lock
-lock = Lock()
+
+from sklearn.externals import joblib
+from skimage.feature import hog
 
 class DigitAppController(controller.CementBaseController):
     class Meta:
@@ -58,13 +59,13 @@ class Transcriber:
 
         self.get_meta(image_choice)
 
-        im_points = self.transcribe(rects, im, im_th, im_blank, im_check)
+        im_points, im_check, im_blank, input_numbers = self.transcribe(rects, im, im_th, im_blank, im_check)
 
         points = np.array([self.point_ids, self.x_points, self.y_points])
 
         numbers = self.connect_digits(points, im_points)
 
-        self.save_data(numbers, image_choice, im_check)
+        self.save_data(numbers, image_choice, im_check, im_blank, input_numbers)
 
     def check_workspace(self, config):
         # Set where we typically source our images, set output directory
@@ -177,11 +178,14 @@ class Transcriber:
         im = cv2.imread(image_choice)
         height, width, channels = im.shape
 
+
         # Convert to grayscale and apply Gaussian filtering
         im_gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
         im_gray = cv2.GaussianBlur(im_gray, (5, 5), 0)
         im_blank = np.asarray(PIL.Image.new("RGB", (width, height), "white"))
         im_check = im_blank.copy()
+        im_blank = im.copy()
+        ret, im_blank = cv2.threshold(im_blank, 90, 255, cv2.THRESH_BINARY_INV)
 
         # Threshold the image
         ret, im_th = cv2.threshold(im_gray, 90, 255, cv2.THRESH_BINARY_INV)
@@ -205,10 +209,16 @@ class Transcriber:
         i = 0
         im_orig = im.copy()
         im_points = im.copy()
+        input_numbers = []
         s_type = len(rects)
+
+        data = {}
+        mistakes = []
+
         for rect in rects:
             # Draw the rectangles
             cv2.rectangle(im, (rect[0], rect[1]), (rect[0] + rect[2], rect[1] + rect[3]), (0, 255, 0), 3)
+            cv2.rectangle(im_blank, (rect[0], rect[1]), (rect[0] + rect[2], rect[1] + rect[3]), (0, 255, 0), 3)
             # Make the rectangular region around the digit
             leng = int(rect[3] * 1.6)
             pt1 = int(rect[1] + rect[3] // 2 - leng // 2)
@@ -216,6 +226,7 @@ class Transcriber:
 
             s_type = s_type - 1
             print s_type
+
             if pt1 < 0:
                 pt1 = 0
 
@@ -232,6 +243,7 @@ class Transcriber:
 
             #if i > 10:
                 #break;
+
 
             if roi.size > 100:
                 labeled_array, num_features = nd.label(roi)
@@ -254,7 +266,11 @@ class Transcriber:
                 digit_loc = im_orig.copy()
                 cv2.rectangle(digit_loc, (rect[0], rect[1]), (rect[0] + rect[2], rect[1] + rect[3]), (0, 255, 0), 3)
                 dh, dw, dc = digit_loc.shape
-                #roi = cv2.resize(roi, (100, 100))
+                hog_roi = cv2.resize(roi, (28, 28), interpolation=cv2.INTER_AREA)
+                roi_hog_fd = hog(hog_roi, orientations=9, pixels_per_cell=(14,14), cells_per_block=(1,1), visualise=False)
+                guess = clf.predict(np.array([roi_hog_fd], dtype=float))[0]
+
+
                 digit_loc = cv2.resize(digit_loc, (int(dw*sf2), int(dh*sf2)))
 
                 input_number = False
@@ -262,19 +278,31 @@ class Transcriber:
 
                 label_choice = cycle(labels)
                 v = label_choice.next()
+
                 while input_number is False:
                     rh, rw = roi.shape
-                    iP = imagePrompt(roi, rh, rw)
+                    iP = imagePrompt(roi, rh, rw, guess)
                     if iP.output == 'check':
                         print 'Is digit correct?, [y, n]'
                         dh, dw, dc = digit_loc.shape
                         jP = imagePrompt(digit_loc, dh, dw)
                         if jP.output == 'n':
                            roi = self.select_label(labeled_array, label_choice.next())
+                           hog_roi = cv2.resize(roi, (28, 28), interpolation=cv2.INTER_AREA)
+                           roi_hog_fd = hog(hog_roi, orientations=9, pixels_per_cell=(14,14), cells_per_block=(1,1), visualise=False)
+                           guess = clf.predict(np.array([roi_hog_fd], dtype=float))[0]
 
                     elif iP.output == '.':
                         print 'Cycling next label'
                         roi = self.select_label(labeled_array, label_choice.next())
+                        hog_roi = cv2.resize(roi, (28, 28), interpolation=cv2.INTER_AREA)
+                        roi_hog_fd = hog(hog_roi, orientations=9, pixels_per_cell=(14,14), cells_per_block=(1,1), visualise=False)
+                        guess = clf.predict(np.array([roi_hog_fd], dtype=float))[0]
+                    elif iP.output == '!':
+                        print 'Alerting possible mistake'
+                        if i > 1:
+                            mistakes.append(i-1)
+
                     elif iP.output == 'n':
                         input_number = iP.output
                     else:
@@ -284,33 +312,62 @@ class Transcriber:
 
 
                 if iP.output == 'n':
-                    print 'Target discarded!'
+                     print 'Target discarded!'
                 else:
-                    self.point_ids.append(i)
-                    cv2.destroyAllWindows()
-                    self.number_input.update({i:input_number})
+                    data.update({i:{
+                        'x_org': x_org,
+                        'y_org': y_org,
+                        'input': input_number,
+                        'roi': roi
+                    }})
 
-                    self.x_points.append(x_org)
-                    self.y_points.append(y_org)
-                    cv2.putText(im_check, str(input_number), (x_org, y_org), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 3)
-                    cv2.circle(im_points,(x_org,y_org), 7, (0,0,225), -1)
-                    self.taught_data.append(roi)
-                    self.taught_labels.append(input_number)
+        check = False
 
-                # self.point_ids.append(i)
-                # cv2.destroyAllWindows()
-                #
-                # self.number_input.update({i:input_number})
-                #
-                # self.x_points.append(x_org)
-                # self.y_points.append(y_org)
-                # cv2.putText(im_check, str(input_number), (x_org, y_org), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 3)
-                # cv2.circle(im_points,(x_org,y_org), 7, (0,0,225), -1)
-                # self.taught_data.append(roi)
-                # self.taught_labels.append(input_number)
+        print 'Mistakes:'
+        print mistakes
+        print data.keys()
+        while check is False:
+            p = shell.Prompt('Check values?', ['y', 'n'])
+            intval = False
+            num = re.sub(r'[^\d]+', '', p.input)
+            if num:
+                intval = int(re.sub(r'[^\d]+', '', p.input))
+
+            print intval
+            if p.input == 'n':
+                check = True
+            elif intval in data.keys():
+                d = data[intval]
+                dh, dw = d['roi'].shape
+                jP = imagePrompt(d['roi'], dh, dw, d['input'])
+                data.update({intval:{
+                    'x_org': d['x_org'],
+                    'y_org': d['y_org'],
+                    'input': int(jP.output),
+                    'roi': d['roi']
+                }})
+            else:
+                print 'Key not found'
 
 
-        return im_points
+
+        input_numbers = []
+        for k, v in data.iteritems():
+            self.point_ids.append(k)
+            cv2.destroyAllWindows()
+            self.number_input.update({k:v['input']})
+
+            self.x_points.append(v['x_org'])
+            self.y_points.append(v['y_org'])
+            cv2.putText(im_check, str(v['input']), (v['x_org'], v['y_org']), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 3)
+            cv2.putText(im_blank, str(k), (v['x_org'], v['y_org']), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 0, 255), 2)
+            cv2.putText(im_blank, str(k), (v['x_org'], v['y_org']), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 0, 255), 2)
+            cv2.circle(im_points,(v['x_org'],v['y_org']), 7, (0,0,225), -1)
+            self.taught_data.append(v['roi'])
+            self.taught_labels.append(v['input'])
+            input_numbers.append(v['input'])
+
+        return im_points, im_check, im_blank, input_numbers
 
     def connect_digits(self, points, image):
         # Human test to ensure multi-character digits are grouped, then automatically combine based on location
@@ -464,7 +521,6 @@ class Transcriber:
         for s in singular_digits:
             numlist.append(int(self.number_input[s]))
 
-        print connected_groups
         for g in connected_groups:
             num_string = ''
             # Reorder according to left-right position
@@ -504,7 +560,7 @@ class Transcriber:
 
         return folder_path
 
-    def save_data(self, numbers, image_choice, im_check):
+    def save_data(self, numbers, image_choice, im_check, im_blank, input_numbers):
 
         # Save data to directory
         meta = self.meta
@@ -548,6 +604,15 @@ class Transcriber:
             for n in numbers:
                 wr.writerow([n])
 
+        csv_name = prefix+'input.csv'
+        csv_path = os.path.join(data_path, csv_name)
+
+        print 'Saving data input copy: '+csv_path
+
+        with open(csv_path, 'wb') as csvfile:
+            wr = csv.writer(csvfile, delimiter=',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
+            for iN in input_numbers:
+                wr.writerow([iN])
 
         # Save taught data
         print 'Saving taught data'
@@ -559,6 +624,8 @@ class Transcriber:
         # Save digit image
         print 'Saving images'
         cv2.imwrite(os.path.join(data_path,prefix+'digits.png'), im_check)
+        cv2.imwrite(os.path.join(data_path,prefix+'roi.png'), im_blank)
+
 
         # Copy image
         image_basename = os.path.basename(image_choice)
@@ -569,10 +636,15 @@ class Transcriber:
 shutdown_event = threading.Event()
 
 class imagePrompt():
-    def __init__(self, image, h, w):
+    def __init__(self, image, h, w, guess=False):
         self.root = Tk()
         self.output = False
-        self.entry = Entry(self.root)
+        self.guess = False
+        if guess is not False:
+            self.guess = True
+
+        self.entry_text = StringVar(self.root, value=guess)
+        self.entry = Entry(self.root, textvariable=self.entry_text)
         self.entry.pack()
         self.entry.focus_set()
         self.canvas = Canvas(self.root, width=w, height=h)
@@ -581,11 +653,19 @@ class imagePrompt():
         tk_img = ImageTk.PhotoImage(im)
         self.canvas.create_image(0, 0, image=tk_img, anchor='nw')
         self.entry.bind('<Key-Return>', self.response)
+        self.entry.bind('<Key>', self.remove_guess)
         self.root.mainloop()
 
     def response(self, event):
         self.output = self.entry.get()
         self.root.destroy()
+
+    def remove_guess(self, event):
+        if self.guess is True:
+            self.entry.config(textvariable=StringVar(self.root, value=''))
+            self.guess = False
+
+
 
 def roiCheck(roi, point):
     inside = False
@@ -701,6 +781,9 @@ class connectionSelect(Tk):
 
 sf = 2.5
 sf2 = 1/float(sf)
+
+clf = joblib.load('digit_learn_working.pkl')
+
 
 
 app.setup()
