@@ -19,7 +19,7 @@ if os.path.isfile('recent_data.npy') and os.path.isfile('recent_label.npy'):
     data = np.load('recent_data.npy')
     labels = np.load('recent_labels.npy')
 else:
-    for root, dirnames, filenames in os.walk('/run/media/sam/3086-05D9/Teach_Data'):
+    for root, dirnames, filenames in os.walk('Teach_Data'):
             #if filename in directories:
             #    directories.append(filename)
             #dk = directories.index(filename)
@@ -63,8 +63,8 @@ grouped_labels = []
 print 'Process learning data'
 
 if use_g_data:
-    grouped_data = np.load('/run/media/sam/3086-05D9/Projects/hand-digit-transcriber/original_data.npy')
-    grouped_labels = np.load('/run/media/sam/3086-05D9/Projects/hand-digit-transcriber/original_labels.npy')
+    grouped_data = np.load('original_data.npy')
+    grouped_labels = np.load('original_labels.npy')
 
     for feature in grouped_data:
          fd = hog(feature.reshape((28, 28)), orientations=9, pixels_per_cell=(14, 14), cells_per_block=(1, 1), visualise=True)

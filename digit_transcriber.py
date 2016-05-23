@@ -665,8 +665,6 @@ class imagePrompt():
             self.entry.config(textvariable=StringVar(self.root, value=''))
             self.guess = False
 
-
-
 def roiCheck(roi, point):
     inside = False
     x_inside = False
