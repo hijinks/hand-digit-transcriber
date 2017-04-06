@@ -780,7 +780,7 @@ class connectionSelect(Tk):
 sf = 2.5
 sf2 = 1/float(sf)
 
-clf = joblib.load('digit_learn_working.pkl')
+clf = joblib.load('digit_learn_all.pkl')
 
 
 
@@ -790,7 +790,7 @@ app.run()
 
 
 # Using my own config for now
-sam_config_path = '/home/sam/.sam'
+sam_config_path = '/home/sb708/.sam'
 config_raw = ruamel.yaml.load(open(sam_config_path), ruamel.yaml.RoundTripLoader)
 config = {
     'image_directory': None,

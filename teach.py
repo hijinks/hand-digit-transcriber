@@ -67,8 +67,8 @@ if use_g_data:
     grouped_labels = np.load('original_labels.npy')
 
     for feature in grouped_data:
-         fd = hog(feature.reshape((28, 28)), orientations=9, pixels_per_cell=(14, 14), cells_per_block=(1, 1), visualise=True)
-         list_hog_fd.append(fd)
+         fd = hog(feature.reshape((28, 28)), orientations=9, pixels_per_cell=(14, 14), cells_per_block=(1, 1), visualise=False)
+         list_hog_fd.append(np.asarray(fd))
 
 
 for idx in range(len(data)):
@@ -79,7 +79,8 @@ for idx in range(len(data)):
             for y in d:
                 x = np.resize(y,(28,28))
                 fd = hog(x.reshape(28, 28), orientations=9, pixels_per_cell=(14, 14), cells_per_block=(1, 1), visualise=False)
-                list_hog_fd.append(fd)
+                list_hog_fd.append(np.asarray(fd))
+
             grouped_labels = np.hstack([grouped_labels,l]).flatten()
 
     except:
